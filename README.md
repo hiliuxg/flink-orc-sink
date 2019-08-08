@@ -1,1 +1,20 @@
 # flink-orc-sink
+
+通过启动checkpoint能保证端到端的exactly once
+
+##flink orc sink 有3个状态
+
+1、当新记录来的时候，会根据目录路径，创建一个文件，该文件会以下划线"_"开头，in-process结尾，这时候，数据还在内存中，不会刷到文件系统，hive不可读
+
+2、当checkpoint时候，会将内存的数据刷到文件系统，并将该目录下的in-process文件rename成以下划线"_"开头，in-appending结尾的文件，hive不可读
+
+3、当收到checkpoint完成时的事件，会将该目录下in-appending文件最终转化成结果文件，这时，该文件可通过hive读取
+
+##内存数据何时落到文件系统 ？
+
+当checkpoint完成时候，会将内存数据落到文件系统
+
+##出现异常时，如何容错 ？
+
+出现异常，当前内存中的数据将会丢失，文件系统中in-process，in-appending状态的文件对于hive来说不可读，直接丢弃。
+kafka source的offset将会重置到上一个checkpoint的offset重新消费，创建新文件
