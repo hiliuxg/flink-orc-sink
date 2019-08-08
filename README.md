@@ -1,8 +1,8 @@
 # flink-orc-sink
 
-通过启动checkpoint能保证端到端的exactly once
+通过Flink BucketingSink改造，启动checkpoint能保证端到端的exactly once
 
-#### flink orc sink 有3个状态
+#### 落地文件有3个状态
 
 1、当新记录来的时候，会根据目录路径，创建一个文件，该文件会以下划线"_"开头，in-process结尾，这时候，数据还在内存中，不会刷到文件系统，hive不可读
 
@@ -24,7 +24,6 @@ kafka source的offset将会重置到上一个checkpoint的offset重新消费，�
 
 ```
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-
         //enable checkpoint to guarantee exactly once
         env.enableCheckpointing(1 * 30 * 1000L);
         env.setParallelism(1);
