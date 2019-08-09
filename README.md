@@ -12,7 +12,7 @@
 
 #### 内存数据何时落到文件系统 ？
 
-当checkpoint完成时候，会将内存数据落到文件系统
+当checkpoint时，即触发snapshotState，会将内存数据落到文件系统，这时，文件是以in-appending结尾的，hive不可读，当接收到checkpoint完成事件时，即触发notifyCheckpointComplete方法时，会将in-appending文件最终转化成结果文件，这时，可通过hive读取
 
 #### 出现异常时，如何容错 ？
 
