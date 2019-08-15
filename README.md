@@ -1,6 +1,8 @@
 # flink-orc-sink
 
-通过Flink BucketingSink改造，启动checkpoint能保证端到端的exactly once
+基于BucketingSink改造，启动checkpoint能保证端到端的exactly once。
+注意：该方案有不完美的地方，就是在取消作业同时savepoint时会丢数，解决方案就是取消作业时，直接cancel，不要cancel -s了
+
 
 #### 落地文件有3个状态
 
@@ -46,4 +48,3 @@ kafka source的offset将会重置到上一个checkpoint的offset重新消费，�
 
         env.execute("orc sink test execute");
 ```
-

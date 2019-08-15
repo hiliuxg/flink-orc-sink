@@ -1,6 +1,8 @@
 package cn.hiliuxg.flink.sink.orc;
 
+import org.apache.flink.api.common.functions.RuntimeContext;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.metrics.Gauge;
 import org.apache.flink.runtime.state.CheckpointListener;
 import org.apache.flink.runtime.state.FunctionInitializationContext;
 import org.apache.flink.runtime.state.FunctionSnapshotContext;
@@ -57,6 +59,9 @@ public class RowOrcBucketingSink extends RichSinkFunction<Row>
      */
     private transient FileSystem fs;
 
+
+    private transient Long watermarkPerOrcBucketing;
+
     /**
      * Creates a new {@code RowOrcBucketingSink} that writes files to the given base directory.
      *
@@ -76,6 +81,8 @@ public class RowOrcBucketingSink extends RichSinkFunction<Row>
     public void open(Configuration parameters) throws Exception {
         this.state = new RowOrcBucketingSink.State<>();
         this.fs = new Path(basePath).getFileSystem(confTrans(fsConfig)) ;
+        RuntimeContext context = super.getRuntimeContext();
+        context.getMetricGroup().gauge("watermarkPerOrcBucketing", (Gauge<Long>) () -> watermarkPerOrcBucketing);
     }
 
     @Override
@@ -86,10 +93,6 @@ public class RowOrcBucketingSink extends RichSinkFunction<Row>
         synchronized (this.state) {
             try{
                 if (fs != null){
-                    Map<Long, List<Path>> pendingFileMap = this.state.pendingFilesPerCheckpoint ;
-                    for (Long checkpointId : pendingFileMap.keySet()){
-                        this.movePendingFile(checkpointId);
-                    }
                     fs.close();
                 }
             }catch (Exception ex){}
@@ -102,6 +105,7 @@ public class RowOrcBucketingSink extends RichSinkFunction<Row>
             Path bucketPath = bucketer.getBucketPath(null, new Path(basePath), value);
             RowOrcBucketingSink.BucketState<Row> bucketState = this.findBucketState(bucketPath) ;
             bucketState.writer.write(value);
+            bucketState.currentWatermark = context.currentWatermark();
         }
     }
 
@@ -144,18 +148,18 @@ public class RowOrcBucketingSink extends RichSinkFunction<Row>
     public void snapshotState(FunctionSnapshotContext context) throws Exception {
         synchronized (this.state) {
             try {
-                Iterator<Map.Entry<String, BucketState<Row>>> bucketStatesIt
+                Iterator<Map.Entry<String, RowOrcBucketingSink.BucketState<Row>>> bucketStatesIt
                         = this.state.bucketStates.entrySet().iterator();
                 while (bucketStatesIt.hasNext()) {
                     RowOrcBucketingSink.BucketState<Row> bucketState = bucketStatesIt.next().getValue();
                     closeAndMoveProcessFile(bucketState,context.getCheckpointId());
+                    this.state.putWatermark(context.getCheckpointId(),bucketState.currentWatermark) ;
                     bucketStatesIt.remove();
                 }
             }catch (Exception ex){
                 this.state.removePendingFile(context.getCheckpointId());
                 throw ex ;
             }
-
         }
     }
 
@@ -179,9 +183,11 @@ public class RowOrcBucketingSink extends RichSinkFunction<Row>
                 if (!fs.exists(partFile)){
                     fs.rename(pendingFile,partFile) ;
                 }
-                LOG.info("checkpointId {} move pending file , {} to {}" ,checkpointId,pendingFile,partFile);
+                LOG.info("move pending file , {} to {}" ,checkpointId,pendingFile,partFile);
             }
             this.state.removePendingFile(checkpointId) ;
+            this.watermarkPerOrcBucketing = this.state.getWatermark(checkpointId);
+            this.state.removeWatermark(checkpointId);
         }
     }
 
@@ -266,12 +272,17 @@ public class RowOrcBucketingSink extends RichSinkFunction<Row>
          * We use it to store the bucket , one diretory one bucket .
          * And we will remove it when the checkpoint snapshot finish
          */
-        private final Map<String, BucketState<Row>> bucketStates = new HashMap<>();
+        private final Map<String, RowOrcBucketingSink.BucketState<Row>> bucketStates = new HashMap<>();
 
         /**
          * Use for storing the pending file when checkpoint snapshot finish
          */
         private final Map<Long, List<Path>> pendingFilesPerCheckpoint = new HashMap<>();
+
+        /**
+         * When checkpoint finish ,we send the current watermark metric to exporter
+         */
+        private final Map<Long,Long> watermarkPerCheckpoint = new HashMap<>() ;
 
         /**
          * We use it to store the newly open bucket index
@@ -297,11 +308,23 @@ public class RowOrcBucketingSink extends RichSinkFunction<Row>
             return counter ;
         }
 
+        Long getWatermark(Long checkpointId ){
+            return this.watermarkPerCheckpoint.get(checkpointId);
+        }
+
+        void putWatermark(Long checkpointId,Long watermark ){
+            this.watermarkPerCheckpoint.put(checkpointId,watermark);
+        }
+
+        void removeWatermark(Long checkpointId){
+            this.watermarkPerCheckpoint.remove(checkpointId) ;
+        }
+
         void removePendingFile(Long checkpointId){
             this.pendingFilesPerCheckpoint.remove(checkpointId) ;
         }
 
-        void addPendingFile(Long checkpointId, Path pendingFile){
+        void addPendingFile(Long checkpointId,Path pendingFile){
             List<Path> pendingFileList = this.pendingFilesPerCheckpoint.get(checkpointId);
             if (pendingFileList == null){
                 pendingFileList = new ArrayList<>();
@@ -336,6 +359,8 @@ public class RowOrcBucketingSink extends RichSinkFunction<Row>
          * Tracks if the writer is currently opened or closed.
          */
         private boolean isWriterOpen = false;
+
+        private long currentWatermark = Long.MIN_VALUE ;
 
         /**
          * The in-process file  writting currently
