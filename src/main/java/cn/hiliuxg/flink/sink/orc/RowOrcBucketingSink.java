@@ -8,9 +8,11 @@ import org.apache.flink.runtime.state.FunctionInitializationContext;
 import org.apache.flink.runtime.state.FunctionSnapshotContext;
 import org.apache.flink.streaming.api.checkpoint.CheckpointedFunction;
 import org.apache.flink.streaming.api.functions.sink.RichSinkFunction;
+import org.apache.flink.streaming.api.windowing.time.Time;
 import org.apache.flink.streaming.connectors.fs.Writer;
 import org.apache.flink.streaming.connectors.fs.bucketing.BasePathBucketer;
 import org.apache.flink.streaming.connectors.fs.bucketing.Bucketer;
+import org.apache.flink.streaming.connectors.fs.bucketing.BucketingSink;
 import org.apache.flink.types.Row;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -78,15 +80,19 @@ public class RowOrcBucketingSink extends RichSinkFunction<Row>
     }
 
     @Override
-    public void open(Configuration parameters) throws Exception {
+    public void open(Configuration parameters) {
         this.state = new RowOrcBucketingSink.State<>();
-        this.fs = new Path(basePath).getFileSystem(confTrans(fsConfig)) ;
         RuntimeContext context = super.getRuntimeContext();
         context.getMetricGroup().gauge("watermarkPerOrcBucketing", (Gauge<Long>) () -> watermarkPerOrcBucketing);
     }
 
     @Override
-    public void initializeState(FunctionInitializationContext context){}
+    public void initializeState(FunctionInitializationContext context) throws IOException {
+        if (fs == null) {
+            Path path = new Path(basePath);
+            fs = BucketingSink.createHadoopFileSystem(path, fsConfig);
+        }
+    }
 
     @Override
     public void close() {
@@ -186,7 +192,9 @@ public class RowOrcBucketingSink extends RichSinkFunction<Row>
                 LOG.info("move pending file , {} to {}" ,checkpointId,pendingFile,partFile);
             }
             this.state.removePendingFile(checkpointId) ;
-            this.watermarkPerOrcBucketing = this.state.getWatermark(checkpointId);
+
+            //convenion to see in promethues monitor ,due to the UTC Time . In china ,we minus 8 hours
+            this.watermarkPerOrcBucketing = this.state.getWatermark(checkpointId) - Time.hours(8).toMilliseconds();
             this.state.removeWatermark(checkpointId);
         }
     }
