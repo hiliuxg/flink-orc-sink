@@ -12,6 +12,7 @@ import org.apache.orc.OrcFile;
 import org.apache.orc.TypeDescription;
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.nio.charset.Charset;
 import java.sql.Timestamp;
 
 public class RowOrcWriter implements Writer<Row> {
@@ -65,53 +66,50 @@ public class RowOrcWriter implements Writer<Row> {
 
         //fill up the orc value
         for (int i = 0 ; i < this.orcSchema.getFieldCount() ;i++){
-            String type = this.orcSchema.getOrcFieldType(i) ;
-            switch (type) {
-                case OrcSchema.OrcType.TYPE_BOOLEAN :
-                    LongColumnVector booleanColumnVector = (LongColumnVector) batch.cols[i];
-                    booleanColumnVector.vector[index] = Long.parseLong(((Boolean)row.getField(i)) ? "1" : "0" );
-                    break ;
-                case OrcSchema.OrcType.TYPE_BIGINT :
-                    LongColumnVector bigintColumnVector = (LongColumnVector) batch.cols[i];
-                    bigintColumnVector.vector[index] = (Long)row.getField(i);
-                    break ;
-                case OrcSchema.OrcType.TYPE_DECIMAL :
-                    DecimalColumnVector decimalColumnVector = (DecimalColumnVector) batch.cols[i];
-                    BigDecimal bigDecimal = (BigDecimal)row.getField(i);
-                    HiveDecimal hiveDecimal = HiveDecimal.create(bigDecimal);
-                    HiveDecimalWritable hiveDecimalWritable = new HiveDecimalWritable(hiveDecimal);
-                    decimalColumnVector.precision = Short.valueOf(bigDecimal.precision() + "");
-                    decimalColumnVector.scale = Short.valueOf(bigDecimal.scale() + "");
-                    decimalColumnVector.vector[index] = hiveDecimalWritable ;
-                    break ;
-                case OrcSchema.OrcType.TYPE_DOUBLE :
-                    DoubleColumnVector doubleColumnVector = (DoubleColumnVector) batch.cols[i];
-                    doubleColumnVector.vector[index] = (Double)row.getField(i);
-                    break ;
-                case OrcSchema.OrcType.TYPE_FLOAT :
-                    DoubleColumnVector floatColumnVector = (DoubleColumnVector) batch.cols[i];
-                    floatColumnVector.vector[index] = Double.parseDouble(row.getField(i).toString());
-                    break ;
-                case OrcSchema.OrcType.TYPE_INT :
-                    LongColumnVector intColumnVector = (LongColumnVector) batch.cols[i];
-                    intColumnVector.vector[index] = Long.parseLong(row.getField(i).toString());
-                    break ;
-                case OrcSchema.OrcType.TYPE_TINYINT :
-                    LongColumnVector tinyColumnVector = (LongColumnVector) batch.cols[i];
-                    tinyColumnVector.vector[index] = Long.parseLong(row.getField(i).toString());
-                    break ;
-                case OrcSchema.OrcType.TYPE_STRING :
-                    BytesColumnVector stringColumnVector = (BytesColumnVector) batch.cols[i];
-                    stringColumnVector.setVal(index,row.getField(i).toString().getBytes());
-                    break ;
-                case OrcSchema.OrcType.TYPE_TIMESTAMP :
-                    TimestampColumnVector timestampColumnVector = (TimestampColumnVector) batch.cols[i];
-                    Timestamp timestamp = (Timestamp)row.getField(i) ;
-                    timestampColumnVector.time[index] = timestamp.getTime();
-                    timestampColumnVector.nanos[index] = timestamp.getNanos() ;
-                    break ;
+
+            ColumnVector cv = batch.cols[i];
+            Object colVal = row.getField(i);
+
+            if (colVal != null){
+                String type = this.orcSchema.getOrcFieldType(i) ;
+                switch (type) {
+                    case OrcSchema.OrcType.TYPE_BOOLEAN :
+                    case OrcSchema.OrcType.TYPE_BIGINT :
+                    case OrcSchema.OrcType.TYPE_INT :
+                    case OrcSchema.OrcType.TYPE_TINYINT :
+                        LongColumnVector longCv = (LongColumnVector) cv;
+                        longCv.vector[index] = Long.parseLong(colVal.toString());
+                        break ;
+                    case OrcSchema.OrcType.TYPE_DOUBLE :
+                    case OrcSchema.OrcType.TYPE_FLOAT :
+                        DoubleColumnVector doubleCv = (DoubleColumnVector) cv;
+                        doubleCv.vector[index] = Double.parseDouble(colVal.toString());
+                        break ;
+                    case OrcSchema.OrcType.TYPE_STRING :
+                        BytesColumnVector bytesCv = (BytesColumnVector) cv;
+                        bytesCv.setVal(index,colVal.toString().getBytes(Charset.forName("utf-8")));
+                        break ;
+                    case OrcSchema.OrcType.TYPE_TIMESTAMP :
+                        TimestampColumnVector timestampCv = (TimestampColumnVector) cv;
+                        Timestamp timestamp = (Timestamp)colVal ;
+                        timestampCv.time[index] = timestamp.getTime();
+                        timestampCv.nanos[index] = timestamp.getNanos() ;
+                        break ;
+                    case OrcSchema.OrcType.TYPE_DECIMAL :
+                        DecimalColumnVector decimalCv= (DecimalColumnVector) cv;
+                        BigDecimal bigDecimal = (BigDecimal)colVal;
+                        HiveDecimal hiveDecimal = HiveDecimal.create(bigDecimal);
+                        HiveDecimalWritable hiveDecimalWritable = new HiveDecimalWritable(hiveDecimal);
+                        decimalCv.precision = Short.valueOf(bigDecimal.precision() + "");
+                        decimalCv.scale = Short.valueOf(bigDecimal.scale() + "");
+                        decimalCv.vector[index] = hiveDecimalWritable ;
+                        break ;
                     default:
-                        throw new RuntimeException("the flink type " + type + " not support to orc now") ;
+                        throw new RuntimeException("the " + type + " type not support to orc now") ;
+                }
+            }else{
+                cv.noNulls = false ;
+                cv.isNull[index] = true ;
             }
         }
 
